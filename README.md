@@ -18,6 +18,7 @@ crosshair/
 ├── backend/             # FastAPI backend
 │   ├── app/             # Python package for the API
 │   └── requirements.txt # Python dependencies
+├── deploy-backend.sh    # Script for EC2 deployment
 ```
 
 ## Prerequisites
@@ -76,7 +77,7 @@ cd ../frontend
 npm install
 ```
 
-## Running the Application
+## Running the Application Locally
 
 ### 1. Start the backend server
 
@@ -102,6 +103,65 @@ npm run dev
 ```
 
 The frontend will be available at http://localhost:5173
+
+## Deployment
+
+### Frontend Deployment (Vercel)
+
+The frontend is deployed on Vercel with the following details:
+- Main URL: https://crosshair-two.vercel.app
+- Alternative URL: https://crosshair-38qvmv4ii-kaztics-projects.vercel.app
+
+The frontend uses Vercel's rewrites to proxy API requests to the backend. This configuration is in `frontend/vercel.json`:
+
+```json
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "http://13.51.55.96:8000/api/:path*"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, PUT, DELETE, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
+      ]
+    }
+  ]
+}
+```
+
+### Backend Deployment (EC2)
+
+The backend is deployed on an Amazon EC2 instance:
+- IP Address: 13.51.55.96
+- SSH User: ec2-user
+- SSH Key: doc-rs-1.pem
+
+To deploy updates to the backend:
+
+1. Make sure you have the EC2 SSH key (doc-rs-1.pem)
+2. Run the deployment script:
+   ```bash
+   chmod +x deploy-backend.sh
+   ./deploy-backend.sh
+   ```
+
+The script:
+- Updates the code from Git
+- Sets up a Conda environment
+- Installs required dependencies
+- Configures and starts the backend using PM2 for process management
+
+#### EC2 Security Group Configuration
+
+The EC2 instance must have the following ports open in its security group:
+- Port 8000 (TCP): For API access
+- Port 22 (TCP): For SSH access
 
 ## Usage
 
