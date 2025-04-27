@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_URL = 'http://13.51.55.96:8000/api';
+// For production deployment via Vercel, use relative URL which will be handled by rewrites
+const API_URL = '/api';
 
 // Create an axios instance with timeouts and error handling
 const apiClient = axios.create({
