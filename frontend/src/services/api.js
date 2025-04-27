@@ -42,21 +42,24 @@ apiClient.interceptors.response.use(
  * @param {string} code - The code to improve
  * @param {string} prompt - The improvement prompt
  * @param {Array} conversationHistory - Optional conversation history for context
+ * @param {boolean} wholeFile - Whether to treat the code as a complete file
  * @returns {Promise<Object>} - The improved code result
  */
-export const improveCode = async (code, prompt, conversationHistory = null) => {
+export const improveCode = async (code, prompt, conversationHistory = null, wholeFile = false) => {
   try {
     // Log request
     console.log('Requesting code improvement or generation:', { 
       codeLength: code?.length || 0, 
       promptLength: prompt?.length || 0,
       mode: code ? 'improve' : 'generate',
-      historyLength: conversationHistory?.length || 0
+      historyLength: conversationHistory?.length || 0,
+      wholeFile
     });
     
     const requestData = {
       code,
-      prompt
+      prompt,
+      wholeFile  // Add flag to indicate whole file editing
     };
     
     // Add conversation history if provided
@@ -77,7 +80,10 @@ export const improveCode = async (code, prompt, conversationHistory = null) => {
     // Map response properties for consistency
     const result = {
       improved_code: response.data.improvedCode,
-      explanation: response.data.explanation
+      explanation: response.data.explanation,
+      precise_edits: response.data.preciseEdits || [],
+      diff_info: response.data.diffInfo || null,  // Add diff info from the response
+      original_code: code  // Keep the original code for diff view
     };
     
     return result;

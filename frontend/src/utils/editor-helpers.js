@@ -38,6 +38,55 @@ export function replaceSelectedText(editor, newText, range = null) {
 }
 
 /**
+ * Apply a precise edit to the code at specific line numbers
+ * @param {Object} editor - Monaco editor instance
+ * @param {number} startLine - Starting line number (1-indexed)
+ * @param {number} endLine - Ending line number (1-indexed)
+ * @param {string} newText - New text to replace the lines with
+ * @returns {boolean} - Success status
+ */
+export function applyPreciseEdit(editor, startLine, endLine, newText) {
+  if (!editor) {
+    console.error('Editor not available');
+    return false;
+  }
+
+  try {
+    const model = editor.getModel();
+    if (!model) {
+      console.error('Editor model not available');
+      return false;
+    }
+    
+    // Convert to 0-indexed line numbers for internal use
+    const zeroBasedStartLine = startLine - 1;
+    const zeroBasedEndLine = endLine - 1;
+    
+    // Get the range for the specified lines
+    const startLineContent = model.getLineContent(startLine);
+    const endLineContent = model.getLineContent(endLine);
+    
+    const range = {
+      startLineNumber: startLine,
+      startColumn: 1,
+      endLineNumber: endLine,
+      endColumn: endLineContent.length + 1
+    };
+    
+    // Execute the edit
+    editor.executeEdits('preciseEdit', [{
+      range: range,
+      text: newText
+    }]);
+    
+    return true;
+  } catch (error) {
+    console.error('Error applying precise edit:', error);
+    return false;
+  }
+}
+
+/**
  * Get text from a specific range or current selection
  * @param {Object} editor - Monaco editor instance
  * @param {Object} range - Optional range to get text from
@@ -91,4 +140,28 @@ export function createEditorConfig(options = {}) {
     // Override with user options
     ...options
   };
+}
+
+/**
+ * Parse a code edit specification in the format "startLine:endLine:filepath"
+ * @param {string} editSpec - The edit specification string
+ * @returns {Object|null} - An object with startLine, endLine, and filepath properties, or null if invalid
+ */
+export function parseEditSpecification(editSpec) {
+  if (!editSpec) return null;
+  
+  try {
+    // Match the pattern startLine:endLine:filepath
+    const match = editSpec.match(/^(\d+):(\d+):(.+)$/);
+    if (!match) return null;
+    
+    return {
+      startLine: parseInt(match[1], 10),
+      endLine: parseInt(match[2], 10),
+      filepath: match[3]
+    };
+  } catch (error) {
+    console.error('Error parsing edit specification:', error);
+    return null;
+  }
 } 

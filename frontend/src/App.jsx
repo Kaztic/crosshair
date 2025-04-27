@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Editor from './components/Editor';
+import DiffView from './components/DiffView';
 import PromptInput from './components/PromptInput';
 import { improveCode } from './services/api';
 import { getAppropriateTheme } from './utils/monaco-setup';
 import { getMonaco } from './utils/monaco-loader';
+import { parseEditSpecification } from './utils/editor-helpers';
 import './App.css';
 
 function App() {
@@ -33,16 +35,31 @@ function App() {
   const [language, setLanguage] = useState('javascript');
 
   // Track whether we're in code generation or improvement mode
-  const [mode, setMode] = useState('generate'); // 'generate' or 'improve'
+  const [mode, setMode] = useState('improve'); // Default to 'improve' instead of 'generate'
+
+  // Add state for precise edits
+  const [preciseEdits, setPreciseEdits] = useState([]);
+  
+  // Add state for whole file editing
+  const [useWholeFile, setUseWholeFile] = useState(true);
+  const [originalCode, setOriginalCode] = useState('');
+  const [modifiedCode, setModifiedCode] = useState('');
+  const [diffInfo, setDiffInfo] = useState(null);
+  const [showDiff, setShowDiff] = useState(false);
 
   // Clear errors when selection changes
   useEffect(() => {
     setError(null);
     setSuggestion(null);
     
-    // If we have a selection, switch to improve mode, otherwise generate mode
-    setMode(selection && selection.text ? 'improve' : 'generate');
-  }, [selection]);
+    // Always set to improve mode when using whole file
+    if (useWholeFile) {
+      setMode('improve');
+    } else {
+      // If we have a selection, switch to improve mode, otherwise generate mode
+      setMode(selection && selection.text ? 'improve' : 'generate');
+    }
+  }, [selection, useWholeFile]);
 
   // Listen for system theme changes
   useEffect(() => {
@@ -86,6 +103,8 @@ function App() {
   }, []);
 
   const handleSelectionChange = (selectedData) => {
+    // If useWholeFile is true, we still want to track selection for possible future use
+    // but we'll use the whole file for operations regardless
     setSelection(selectedData);
     setSuggestion(null);
   };
@@ -125,6 +144,15 @@ function App() {
     setUseContext(!useContext);
   };
 
+  // Toggle whole file editing mode
+  const toggleWholeFileMode = () => {
+    setUseWholeFile(!useWholeFile);
+    // Clear any existing suggestions when toggling mode
+    setSuggestion(null);
+    setModifiedCode('');
+    setShowDiff(false);
+  };
+
   // Reuse prompt from history
   const usePromptFromHistory = (historyItem) => {
     setPrompt(historyItem.text);
@@ -141,7 +169,7 @@ function App() {
     setLoading(true);
     
     // Save to history
-    const isImproveMode = mode === 'improve' && selection && selection.text;
+    const isImproveMode = mode === 'improve';
     savePromptToHistory(promptValue, isImproveMode);
     
     // Add prompt to conversation context
@@ -154,10 +182,23 @@ function App() {
       const contextToUse = useContext ? conversationContext : null;
       
       if (isImproveMode) {
-        // If we have selected text, improve it
-        result = await improveCode(selection.text, promptValue, contextToUse);
+        // Get the current code from the editor
+        let currentCode = '';
+        if (useWholeFile || !selection) {
+          // For whole file mode, get the entire file content
+          currentCode = editorRef.current ? editorRef.current.getEditor().getValue() : '';
+          setOriginalCode(currentCode);
+        } else {
+          // For selection-based mode, use the selected text
+          currentCode = selection.text;
+        }
+        
+        // If we have selected text or whole file, improve it
+        result = await improveCode(currentCode, promptValue, contextToUse, useWholeFile || !selection);
         const improvedCode = result.improved_code;
         const explanation = result.explanation;
+        const preciseEdits = result.precise_edits;
+        const diffInformation = result.diff_info;
         
         if (!improvedCode) {
           setError('No improved code was returned');
@@ -170,11 +211,29 @@ function App() {
         
         setSuggestion(improvedCode);
         setExplanationHtml(explanation);
+        setPreciseEdits(preciseEdits);
+        
+        // If using whole file mode, set the modified code for diff view
+        if (useWholeFile || !selection) {
+          // Extract the code content from inside the code blocks
+          const codeBlockRegex = /```(?:.*\n)?([\s\S]*?)```/;
+          const match = improvedCode.match(codeBlockRegex);
+          if (match && match[1]) {
+            setModifiedCode(match[1]);
+          } else {
+            setModifiedCode(improvedCode);
+          }
+          setDiffInfo(diffInformation);
+          setShowDiff(true);
+        } else {
+          setShowDiff(false);
+        }
       } else {
         // If no selection, generate code from scratch
-        result = await improveCode('', promptValue, contextToUse);
+        result = await improveCode('', promptValue, contextToUse, false);
         const generatedCode = result.improved_code;
         const explanation = result.explanation;
+        const preciseEdits = result.precise_edits;
         
         if (!generatedCode) {
           setError('No code was generated');
@@ -187,6 +246,8 @@ function App() {
         
         setSuggestion(generatedCode);
         setExplanationHtml(explanation);
+        setPreciseEdits(preciseEdits);
+        setShowDiff(false);
       }
       
       setPrompt(''); // Clear prompt after successful submission
@@ -201,15 +262,18 @@ function App() {
         
         if (status === 429) {
           setError('Rate limit exceeded. Please try again later.');
-        } else if (status === 503) {
-          setError('AI service is currently unavailable. Please try again later.');
-        } else if (detail) {
-          setError(detail);
+        } else if (status === 400) {
+          setError(`Bad request: ${detail || 'Invalid parameters'}`);
+        } else if (status === 500) {
+          setError(`Server error: ${detail || 'Unknown server error'}`);
         } else {
-          setError(`Error (${status}): ${err.message || 'Failed to generate code'}`);
+          setError(`Error (${status}): ${detail || 'Unknown error'}`);
         }
+      } else if (err.request) {
+        // Network error
+        setError('Network error. Please check your connection and try again.');
       } else {
-        setError(err.message || 'Failed to generate code');
+        setError(`Error: ${err.message || 'Unknown error'}`);
       }
       
       setLoading(false);
@@ -217,52 +281,91 @@ function App() {
   };
 
   const applySuggestion = async () => {
-    if (!suggestion) {
-      setError('No generated code available');
-      return;
-    }
+    if (!suggestion) return;
     
     try {
-      if (editorRef.current) {
-        if (mode === 'improve' && selection) {
-          // If improving existing code, replace the selection
-          const success = editorRef.current.replaceSelectedText(suggestion);
-          if (success) {
-            setSuggestion(null);
-          } else {
-            setError('Could not apply changes. Please try selecting the text again.');
-          }
-        } else {
-          // If generating new code, insert at cursor position or replace editor content
+      if (showDiff) {
+        // For whole file edit mode, replace the entire content
+        if (editorRef.current) {
           const editor = editorRef.current.getEditor();
-          if (editor) {
-            const currentPosition = editor.getPosition();
-            if (currentPosition) {
-              // Insert at cursor position
-              editor.executeEdits('insertGenerated', [{
-                range: {
-                  startLineNumber: currentPosition.lineNumber,
-                  startColumn: currentPosition.column,
-                  endLineNumber: currentPosition.lineNumber,
-                  endColumn: currentPosition.column
-                },
-                text: suggestion
-              }]);
-            } else {
-              // Replace entire content if no cursor position
-              editor.setValue(suggestion);
-            }
+          const currentValue = editor.getValue();
+          const model = editor.getModel();
+          
+          if (model) {
+            const lineCount = model.getLineCount();
+            const lastLineLength = model.getLineLength(lineCount);
+            
+            // Create a range that covers the entire file
+            const range = {
+              startLineNumber: 1,
+              startColumn: 1,
+              endLineNumber: lineCount,
+              endColumn: lastLineLength + 1
+            };
+            
+            // Replace the entire content
+            editor.executeEdits('applySuggestion', [{
+              range: range,
+              text: modifiedCode
+            }]);
+            
+            // Reset UI state
             setSuggestion(null);
-          } else {
-            setError('Editor not available');
+            setShowDiff(false);
+            setModifiedCode('');
+            setOriginalCode('');
           }
         }
+      } else if (preciseEdits && preciseEdits.length > 0) {
+        // Apply precise edits if available
+        let allEditsApplied = true;
+        
+        for (const edit of preciseEdits) {
+          const { startLine, endLine, code } = edit;
+          if (startLine && endLine && code) {
+            const success = editorRef.current.applyPreciseEdit(
+              startLine, 
+              endLine, 
+              code
+            );
+            if (!success) {
+              allEditsApplied = false;
+            }
+          }
+        }
+        
+        if (!allEditsApplied) {
+          setError('Some edits could not be applied');
+        } else {
+          // Reset state after successful edit
+          setSuggestion(null);
+          setPreciseEdits([]);
+        }
+      } else if (selection && !useWholeFile) {
+        // For selection-based edits
+        const success = editorRef.current.replaceSelectedText(suggestion);
+        if (!success) {
+          setError('Failed to apply suggestion. Please try again.');
+        } else {
+          setSuggestion(null);
+        }
       } else {
-        setError('Editor not available. Please try again.');
+        // If there's no selection, replace the entire content
+        if (editorRef.current) {
+          const editor = editorRef.current.getEditor();
+          editor.setValue(suggestion);
+          setSuggestion(null);
+        }
       }
+      
+      // Ensure editor gets focus back
+      if (editorRef.current) {
+        editorRef.current.getEditor().focus();
+      }
+      
     } catch (err) {
-      console.error('Error applying generated code:', err);
-      setError('Failed to apply generated code: ' + (err.message || 'Unknown error'));
+      console.error('Error applying suggestion:', err);
+      setError('Failed to apply changes: ' + err.message);
     }
   };
 
@@ -293,11 +396,17 @@ function App() {
 
   // Get action button text based on current mode
   const getActionButtonText = () => {
+    if (useWholeFile && mode === 'improve') {
+      return 'Apply Full File Changes';
+    }
     return mode === 'improve' ? 'Apply Improvement' : 'Insert Generated Code';
   };
 
   // Get prompt placeholder based on current mode
   const getPromptPlaceholder = () => {
+    if (useWholeFile && mode === 'improve') {
+      return "Describe how to improve the entire file...";
+    }
     return mode === 'improve' 
       ? "Describe how to improve the selected code..." 
       : "Describe what code to generate...";
@@ -321,6 +430,22 @@ function App() {
     }
   };
 
+  // Render diff summary information
+  const renderDiffSummary = () => {
+    if (!diffInfo) return null;
+    
+    return (
+      <div className="diff-summary">
+        <p>
+          {diffInfo.additions > 0 && <span className="additions">+{diffInfo.additions} </span>}
+          {diffInfo.deletions > 0 && <span className="deletions">-{diffInfo.deletions} </span>}
+          {diffInfo.changes > 0 && <span className="changes">~{diffInfo.changes} </span>}
+          lines modified
+        </p>
+      </div>
+    );
+  };
+
   console.log('Rendering App component');
 
   return (
@@ -339,6 +464,7 @@ function App() {
             theme={editorTheme}
             language={language}
             height="500px"
+            useWholeFile={useWholeFile}
           />
         </div>
         
@@ -348,9 +474,13 @@ function App() {
               <span className="mode-badge">
                 Mode: {mode === 'improve' ? 'Improve Selected Code' : 'Generate New Code'}
               </span>
-              {mode === 'generate' && 
-                <span className="mode-tip">
-                  Just type your prompt to generate code
+              {mode === 'improve' && 
+                <span 
+                  className={`whole-file-toggle ${useWholeFile ? 'enabled' : 'disabled'}`}
+                  onClick={toggleWholeFileMode}
+                  title={useWholeFile ? "Using whole file mode" : "Using selection mode"}
+                >
+                  {useWholeFile ? "Whole File" : "Selection"}
                 </span>
               }
               <span className={`context-toggle ${useContext ? 'context-active' : ''}`}
@@ -473,7 +603,42 @@ function App() {
               </div>
             )}
             
-            {suggestion && (
+            {suggestion && showDiff && (
+              <div className="suggestion-container">
+                <h3>{mode === 'improve' ? 'Improved Code:' : 'Generated Code:'}</h3>
+                
+                {renderDiffSummary()}
+                
+                <div className="diff-view-wrapper">
+                  <DiffView 
+                    originalCode={originalCode} 
+                    modifiedCode={modifiedCode}
+                    language={language}
+                    height="300px"
+                    theme={editorTheme}
+                  />
+                </div>
+                
+                <button 
+                  className="apply-button"
+                  onClick={applySuggestion}
+                >
+                  {getActionButtonText()}
+                </button>
+                
+                {explanationHtml && (
+                  <div className="explanation-container">
+                    <h3>Explanation:</h3>
+                    <div 
+                      className="explanation-content"
+                      dangerouslySetInnerHTML={{ __html: explanationHtml }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {suggestion && !showDiff && (
               <div className="suggestion-container">
                 <h3>{mode === 'improve' ? 'Improved Code:' : 'Generated Code:'}</h3>
                 <pre className="suggestion-content">{suggestion}</pre>

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
 import { getMonaco } from '../utils/monaco-loader';
-import { createEditorConfig, replaceSelectedText, getSelectedText } from '../utils/editor-helpers';
+import { createEditorConfig, replaceSelectedText, getSelectedText, applyPreciseEdit } from '../utils/editor-helpers';
 import { configureEditorForInputInteraction, getAppropriateTheme } from '../utils/monaco-setup';
 
 const Editor = forwardRef(({
@@ -11,11 +11,20 @@ const Editor = forwardRef(({
   editorOptions = {},
   theme = null, // Will use system preference if null
   onSelectionChange,
+  useWholeFile = true, // Add prop for whole file mode
 }, ref) => {
   const containerRef = useRef(null);
   const editorRef = useRef(null);
   const prevValueRef = useRef(value);
   const [isLoading, setIsLoading] = useState(true);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  const useWholeFileRef = useRef(useWholeFile);
+
+  // Update refs when props change to avoid dependency issues
+  useEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange;
+    useWholeFileRef.current = useWholeFile;
+  }, [onSelectionChange, useWholeFile]);
 
   // Expose editor methods to parent component
   useImperativeHandle(ref, () => ({
@@ -34,6 +43,13 @@ const Editor = forwardRef(({
         return getSelectedText(editorRef.current);
       }
       return null;
+    },
+    // Helper method to apply precise edit at specific lines
+    applyPreciseEdit: (startLine, endLine, newText) => {
+      if (editorRef.current) {
+        return applyPreciseEdit(editorRef.current, startLine, endLine, newText);
+      }
+      return false;
     }
   }));
 
@@ -91,20 +107,81 @@ const Editor = forwardRef(({
       const changeDisposable = editorRef.current.onDidChangeModelContent(() => {
         const newValue = editorRef.current.getValue();
         onChange && onChange(newValue);
+        
+        // If useWholeFile is true, always notify about the whole file as selection
+        if (useWholeFileRef.current && onSelectionChangeRef.current) {
+          const model = editorRef.current.getModel();
+          if (model) {
+            const lineCount = model.getLineCount();
+            const lastLineLength = model.getLineLength(lineCount);
+            
+            // Create a range that covers the entire file
+            const selection = {
+              startLineNumber: 1,
+              startColumn: 1,
+              endLineNumber: lineCount,
+              endColumn: lastLineLength + 1
+            };
+            
+            onSelectionChangeRef.current({
+              text: newValue,
+              range: selection,
+              isWholeFile: true
+            });
+          }
+        }
       });
 
       // Set up selection change listener
       const selectionDisposable = editorRef.current.onDidChangeCursorSelection((e) => {
-        if (onSelectionChange && !e.selection.isEmpty()) {
-          const selectionText = editorRef.current.getModel().getValueInRange(e.selection);
-          onSelectionChange({
-            text: selectionText,
-            range: e.selection,
+        // If useWholeFile is true, send the entire file as selection
+        if (useWholeFileRef.current && onSelectionChangeRef.current) {
+          const model = editorRef.current.getModel();
+          const wholeFileText = model.getValue();
+          
+          onSelectionChangeRef.current({
+            text: wholeFileText,
+            range: {
+              startLineNumber: 1,
+              startColumn: 1,
+              endLineNumber: model.getLineCount(),
+              endColumn: model.getLineLength(model.getLineCount()) + 1
+            },
+            isWholeFile: true
           });
-        } else if (onSelectionChange && e.selection.isEmpty()) {
-          onSelectionChange(null);
+        } 
+        // Otherwise handle normal selection behavior
+        else if (onSelectionChangeRef.current) {
+          if (!e.selection.isEmpty()) {
+            const selectionText = editorRef.current.getModel().getValueInRange(e.selection);
+            onSelectionChangeRef.current({
+              text: selectionText,
+              range: e.selection,
+              isWholeFile: false
+            });
+          } else {
+            onSelectionChangeRef.current(null);
+          }
         }
       });
+
+      // Trigger initial whole file selection if needed
+      if (useWholeFileRef.current && onSelectionChangeRef.current && editorRef.current) {
+        const model = editorRef.current.getModel();
+        if (model) {
+          const wholeFileText = model.getValue();
+          onSelectionChangeRef.current({
+            text: wholeFileText,
+            range: {
+              startLineNumber: 1,
+              startColumn: 1,
+              endLineNumber: model.getLineCount(),
+              endColumn: model.getLineLength(model.getLineCount()) + 1
+            },
+            isWholeFile: true
+          });
+        }
+      }
 
       // Cleanup
       return () => {
@@ -124,7 +201,7 @@ const Editor = forwardRef(({
     return () => {
       mounted = false;
     };
-  }, [language, theme]); // Don't include value as a dependency
+  }, [language, theme, value]); // Remove useWholeFile and onSelectionChange from dependencies
 
   // Update editor value when prop changes and is different from current value
   useEffect(() => {
@@ -132,10 +209,27 @@ const Editor = forwardRef(({
       const currentValue = editorRef.current.getValue();
       if (value !== currentValue) {
         editorRef.current.setValue(value || '');
+        
+        // If useWholeFile is true, notify about the whole file after setting value
+        if (useWholeFileRef.current && onSelectionChangeRef.current) {
+          const model = editorRef.current.getModel();
+          if (model) {
+            onSelectionChangeRef.current({
+              text: value || '',
+              range: {
+                startLineNumber: 1,
+                startColumn: 1,
+                endLineNumber: model.getLineCount(),
+                endColumn: model.getLineLength(model.getLineCount()) + 1
+              },
+              isWholeFile: true
+            });
+          }
+        }
       }
       prevValueRef.current = value;
     }
-  }, [value]);
+  }, [value]); // Remove useWholeFile and onSelectionChange from dependencies
 
   return (
     <div style={{ width: '100%', height, position: 'relative' }}>

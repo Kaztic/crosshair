@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
 import logging
+import re
 
-from app.models import CodeImproveRequest, CodeImproveResponse, ConversationMessage
+from app.models import CodeImproveRequest, CodeImproveResponse, ConversationMessage, CodeEdit, DiffInfo
 from app.services.gemini_service import (
     improve_code, 
     generate_code, 
@@ -16,6 +17,39 @@ from app.services.gemini_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+def extract_precise_edits(improved_code):
+    """
+    Extract precise edits from the formatted code response.
+    
+    Args:
+        improved_code: The formatted code response from the AI
+        
+    Returns:
+        A list of CodeEdit objects
+    """
+    edits = []
+    # Match patterns like ```startLine:endLine:filepath\ncode```
+    pattern = r"```(\d+):(\d+):([^\n]+)\n([\s\S]*?)```"
+    matches = re.finditer(pattern, improved_code)
+    
+    for match in matches:
+        try:
+            start_line = int(match.group(1))
+            end_line = int(match.group(2))
+            filepath = match.group(3)
+            code = match.group(4)
+            
+            edits.append(CodeEdit(
+                startLine=start_line,
+                endLine=end_line,
+                filepath=filepath,
+                code=code
+            ))
+        except Exception as e:
+            logger.error(f"Error parsing edit specification: {e}")
+    
+    return edits
 
 @router.post("/improve-code", response_model=CodeImproveResponse)
 async def improve_code_endpoint(request: CodeImproveRequest):
@@ -36,9 +70,13 @@ async def improve_code_endpoint(request: CodeImproveRequest):
         # Get conversation history if provided
         conversation_history = request.conversationHistory or []
         
-        # Log conversation history length
+        # Check if whole file mode is enabled
+        whole_file = request.wholeFile or False
+        
+        # Log conversation history length and whole file mode
         if conversation_history:
             logger.info(f"Received conversation history with {len(conversation_history)} messages")
+        logger.info(f"Whole file mode: {whole_file}")
         
         # Determine if we're generating new code or improving existing code
         if not request.code or request.code.strip() == "":
@@ -55,10 +93,14 @@ async def improve_code_endpoint(request: CodeImproveRequest):
                 full_prompt = context + "\n\nCurrent request: " + request.prompt
                 logger.info(f"Enhanced prompt with conversation context, new length: {len(full_prompt)}")
             
-            generated_code, explanation = await generate_code(full_prompt)
+            generated_code, explanation, diff_info = await generate_code(full_prompt, whole_file)
+            precise_edits = extract_precise_edits(generated_code) if not whole_file else []
+            
             return CodeImproveResponse(
                 improvedCode=generated_code,
-                explanation=explanation
+                explanation=explanation,
+                preciseEdits=precise_edits,
+                diffInfo=diff_info
             )
         else:
             # Improve existing code
@@ -74,10 +116,14 @@ async def improve_code_endpoint(request: CodeImproveRequest):
                 full_prompt = context + "\n\nCurrent request: " + request.prompt
                 logger.info(f"Enhanced prompt with conversation context, new length: {len(full_prompt)}")
             
-            improved_code, explanation = await improve_code(request.code, full_prompt)
+            improved_code, explanation, diff_info = await improve_code(request.code, full_prompt, whole_file)
+            precise_edits = extract_precise_edits(improved_code) if not whole_file else []
+            
             return CodeImproveResponse(
                 improvedCode=improved_code,
-                explanation=explanation
+                explanation=explanation,
+                preciseEdits=precise_edits,
+                diffInfo=diff_info
             )
     
     except EnvironmentError as e:
