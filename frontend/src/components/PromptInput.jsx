@@ -68,11 +68,11 @@ function PromptInput({ value = '', onSubmit, onShuffle, selection, placeholder =
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
-      {selection && selection.text && (
+      {/* {selection && selection.text && (
         <div className="selection-badge">
           Using selection: {selection.text.length > 30 ? `${selection.text.substring(0, 30)}...` : selection.text}
         </div>
-      )}
+      )} */}
       
       <div className="prompt-input-wrapper">
         <textarea
@@ -83,7 +83,7 @@ function PromptInput({ value = '', onSubmit, onShuffle, selection, placeholder =
           onKeyDown={handleKeyDown}
           className="prompt-input"
           data-autofocus
-          rows={3}
+          rows={4}
         />
         
         <div className="prompt-buttons">

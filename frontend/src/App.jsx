@@ -463,7 +463,7 @@ function App() {
             onSelectionChange={handleSelectionChange}
             theme={editorTheme}
             language={language}
-            height="500px"
+            height="600px"
             useWholeFile={useWholeFile}
           />
         </div>
@@ -472,7 +472,7 @@ function App() {
           <div className="prompt-section">
             <div className="mode-indicator">
               <span className="mode-badge">
-                Mode: {mode === 'improve' ? 'Improve Selected Code' : 'Generate New Code'}
+                Mode: {mode === 'improve' ? 'Generate Code' : 'Generate Code'}
               </span>
               {mode === 'improve' && 
                 <span 
@@ -599,13 +599,13 @@ function App() {
             
             {loading && (
               <div className="loading-indicator">
-                {mode === 'improve' ? 'Generating improvement...' : 'Generating code...'}
+                {mode === 'improve' ? 'Generating code...' : 'Generating code...'}
               </div>
             )}
             
             {suggestion && showDiff && (
               <div className="suggestion-container">
-                <h3>{mode === 'improve' ? 'Improved Code:' : 'Generated Code:'}</h3>
+                <h3>{mode === 'improve' ? 'Generated Code:' : 'Generated Code:'}</h3>
                 
                 {renderDiffSummary()}
                 
