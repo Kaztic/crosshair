@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = '/api';
+const API_URL = 'http://13.51.55.96:8000/api';
 
 // Create an axios instance with timeouts and error handling
 const apiClient = axios.create({
